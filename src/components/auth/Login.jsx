@@ -1,18 +1,23 @@
 import React, { useState, useEffect } from 'react';
-import { TextField, Button, Box, Typography, Alert, Link } from '@mui/material';
+import { TextField, Button, Box, Typography, Alert, Link, FormControlLabel, Checkbox } from '@mui/material';
 import { InputAdornment, IconButton } from '@mui/material';
 import { Visibility, VisibilityOff } from '@mui/icons-material';
 import api from '../../api/axios';
 import { useNavigate, Link as RouterLink } from 'react-router-dom';
 import { UAParser } from 'ua-parser-js';
+import { toast } from 'react-hot-toast';
+import { useAuth } from '../../contexts/AuthContext';
 
 const Login = () => {
   const navigate = useNavigate();
+  const { login } = useAuth();
   const [formData, setFormData] = useState({
     email: '',
     password: '',
-    deviceId: '', // Will be set in useEffect
-    deviceName: '' // Will be set in useEffect
+    deviceId: '',
+    deviceName: '',
+    ipAddress: '',
+    userAgent: navigator.userAgent
   });
   const [error, setError] = useState('');
   const [emailVerificationRequired, setEmailVerificationRequired] = useState(false);
@@ -23,17 +28,35 @@ const Login = () => {
     const parser = new UAParser();
     const result = parser.getResult();
     
-    // Create a unique device ID using browser fingerprint
     const deviceId = generateDeviceId(result);
-    
-    // Create a readable device name
     const deviceName = generateDeviceName(result);
     
-    setFormData(prev => ({
-      ...prev,
-      deviceId,
-      deviceName
-    }));
+    // Lấy IP address từ API
+    const getIpAddress = async () => {
+      try {
+        // Sử dụng ipify API để lấy IP
+        const response = await fetch('https://api.ipify.org?format=json');
+        const data = await response.json();
+        return data.ip;
+      } catch (error) {
+        console.error('Failed to get IP address:', error);
+        return null;
+      }
+    };
+
+    // Cập nhật state với đầy đủ thông tin
+    const initializeFormData = async () => {
+      const ipAddress = await getIpAddress();
+      setFormData(prev => ({
+        ...prev,
+        deviceId,
+        deviceName,
+        ipAddress,
+        userAgent: navigator.userAgent
+      }));
+    };
+
+    initializeFormData();
   }, []);
 
   // Generate a unique device ID based on browser information
@@ -96,35 +119,53 @@ const Login = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      console.log('Logging in with device info:', {
-        deviceId: formData.deviceId,
-        deviceName: formData.deviceName
-      });
-
-      const response = await api.post('/Auth/login', formData);
-      console.log('Login response:', response.data); // Debug log
+      localStorage.clear();
       
-      // Truy cập đúng cấu trúc data
+      const response = await api.post('/Auth/login', formData);
       const loginData = response.data.data;
       
-      // Kiểm tra isEmailVerified từ loginData
       if (!loginData.isEmailVerified) {
         setEmailVerificationRequired(true);
         return;
       }
 
-      // Store tokens and expiration times từ loginData
-      localStorage.setItem('token', loginData.accessToken);
-      localStorage.setItem('refreshToken', loginData.refreshToken);
-      localStorage.setItem('accessTokenExpiresAt', loginData.accessTokenExpiresAt);
-      localStorage.setItem('refreshTokenExpiresAt', loginData.refreshTokenExpiresAt);
-      localStorage.setItem('deviceId', formData.deviceId);
-      localStorage.setItem('deviceName', formData.deviceName);
-      
+      login({
+        ...loginData,
+        deviceId: formData.deviceId,
+        deviceName: formData.deviceName
+      });
+
+      if (loginData.oldestSessionRevoked) {
+        toast('Your oldest session was logged out due to maximum sessions limit.', {
+          duration: 10000,
+          icon: '🔄',
+          style: {
+            background: '#ff9800',
+            color: '#fff',
+            fontWeight: 'bold'
+          }
+        });
+      }
+
+      toast.success('Login successful!', {
+        duration: 10000,
+        icon: '👋'
+      });
       navigate('/dashboard');
     } catch (err) {
       console.error('Login error:', err);
-      setError(err.response?.data?.errors || 'Login failed');
+      let errorMessage = 'Login failed';
+      
+      if (err.response?.data?.errors) {
+        errorMessage = Array.isArray(err.response.data.errors) 
+          ? err.response.data.errors[0] 
+          : err.response.data.errors;
+      }
+      
+      toast.error(errorMessage, {
+        duration: 10000
+      });
+      setError(errorMessage);
     }
   };
 
@@ -184,7 +225,10 @@ const Login = () => {
       />
 
       <Typography variant="caption" color="textSecondary" sx={{ mt: 2, display: 'block' }}>
-        Logging in from: {formData.deviceName}
+        Device: {formData.deviceName}
+      </Typography>
+      <Typography variant="caption" color="textSecondary" sx={{ display: 'block' }}>
+        IP Address: {formData.ipAddress || 'Fetching...'}
       </Typography>
 
       <Button
